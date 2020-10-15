@@ -172,7 +172,7 @@ Resources:
       AlarmActions: 
         - !Ref "SnsArn"
       AlarmDescription: "Monitor a error of lambda function."
-      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[Lambda Error] ', !Ref "UrlMonLambda"]]
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[', !Ref "UrlMonLambda",'] ', 'Error']]
       ComparisonOperator: "GreaterThanOrEqualToThreshold"
       DatapointsToAlarm: 1
       EvaluationPeriods: 1
@@ -283,7 +283,7 @@ Resources:
       AlarmActions: 
         - !Ref "SnsArn"
       AlarmDescription: "Monitor a error of lambda function."
-      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[Lambda Error] ', !Ref "OnCallLambda"]]
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[', !Ref "OnCallLambda", '] ', 'Error']]
       ComparisonOperator: "GreaterThanOrEqualToThreshold"
       DatapointsToAlarm: 1
       EvaluationPeriods: 1
@@ -370,7 +370,7 @@ Resources:
       AlarmActions: 
         - !Ref "SnsArn"
       AlarmDescription: "Monitor a error of lambda function."
-      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[Lambda Error] ', !Ref "CallBkLambda"]]
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[', !Ref "CallBkLambda",'] ', 'Error']]
       ComparisonOperator: "GreaterThanOrEqualToThreshold"
       DatapointsToAlarm: 1
       EvaluationPeriods: 1
@@ -470,7 +470,7 @@ Resources:
       AlarmActions: 
         - !Ref "SnsArn"
       AlarmDescription: "Monitor a error of lambda function."
-      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[Lambda Error] ', !Ref "AddUrlLambda"]]
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[', !Ref "AddUrlLambda",'] ', 'Error']]
       ComparisonOperator: "GreaterThanOrEqualToThreshold"
       DatapointsToAlarm: 1
       EvaluationPeriods: 1
@@ -654,7 +654,7 @@ Resources:
       AlarmActions: 
         - !Ref "SnsArn"
       AlarmDescription: "Monitor a error of lambda function."
-      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[States Error] ', !GetAtt "OncallStates.Name"]]
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[', !GetAtt "OncallStates.Name",'] ', 'Error']]
       ComparisonOperator: "GreaterThanOrEqualToThreshold"
       DatapointsToAlarm: 1
       EvaluationPeriods: 1
