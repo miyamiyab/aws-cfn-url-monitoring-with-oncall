@@ -42,8 +42,6 @@ def lambda_handler(event, context):
                 if os.environ['TEST_URL'] == url:
                     print(url + " " + str(444) + " " + str(exec_time))
                 else:
-                    print("Warning: Not match your specified url to " + url)
-                    print("Note: The actual execution result is output to the log.")
                     print(url + " " + str(code) + " " + str(exec_time))
             else:
                 print(url + " " + str(code) + " " + str(exec_time))

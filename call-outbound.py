@@ -58,21 +58,18 @@ def call_message(
     
 def lambda_handler(event: dict, context: dict) -> None:
     alarm_name = event['ExecutionContext']['Execution']['Input']['detail']['alarmName']
-    start_pos=alarm_name.index("[") + 1
-    stop_pos=alarm_name.index("]")
-    target_url = alarm_name[start_pos:stop_pos]
+    open_bracket_pos=alarm_name.rfind("[") + 1
+    close_bracket_pos=alarm_name.rfind("]")
+    target_url = alarm_name[open_bracket_pos:close_bracket_pos]
     target_url_jpn = get_url_ruby(target_url=target_url)
     
     token = event['ExecutionContext']['Task']['Token']
     calling_order = event['ExecutionContext']['State']['Name']
     destination_phone_number = get_phone_number(calling_order=calling_order)
     
-    
     call_message(
         destination_phone_number = destination_phone_number,
         alarm_name = target_url_jpn,
         token = token
     )
-
-
 
