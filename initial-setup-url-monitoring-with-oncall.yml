@@ -1,0 +1,755 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Create oncall system which consist of AWS Lambda, Amazon DynamoDB, Amazon Connect, AWS Step Functions, and so on."
+Parameters:
+  S3bucketForLmabda:
+    Description: "This is bucket for upload zip files for AWS Lambda." 
+    Type: String
+  S3KeyForUrlMonLambda:
+    Description: "This is s3 object key for Lambda Function for url monitoring." 
+    Type: String
+  S3KeyForUrlMonLambdaLayer:
+    Description: "This is s3 object key for Lambda layer needs by the Lambda Function for url monitoring." 
+    Type: String
+  S3KeyForOnCallLambda:
+    Description: "This is s3 object key for Lambda Function for on call." 
+    Type: String
+  S3KeyForCallBkLambda:
+    Description: "This is s3 object key for Lambda Function for call back to Amazon Connect." 
+    Type: String
+  S3KeyForAddUrlLambda:
+    Description: "This is s3 object key for Lambda Function for add url." 
+    Type: String
+  KmsKeyId:
+    Description: "This is kms customer managed cmk key id for Amazon DynamoDB." 
+    Type: String
+  ContactFlowId:
+    Description: "Contact flow id for oncall system." 
+    Type: String
+  ConnectInstanceId:
+    Description: "Instance id of Amazon Connect." 
+    Type: String
+  SourcePhoneNumber:
+    Description: "Source phone number when call operator." 
+    Type: String
+  SnsArn:
+    Description: "Arn of Amazon SNS" 
+    Type: String  
+  CostTagKey:
+    Description: "Key of tag for cost management." 
+    Type: String
+    Default: "Cost"  
+  CostTagValue:
+    Description: "Value of tag for cost management." 
+    Type: String
+    Default: "oncall" 
+  AccountAlias:
+    Description: "For identify account(environment)." 
+    Type: String
+  ShortNameForDynamoDB:
+    Description: "Arn of Amazon DynamoDB." 
+    Type: String
+    Default: "dynm"
+  ShortNameForLambda:
+    Description: "Arn of AWS Lambda." 
+    Type: String
+    Default: "lmd"
+  ShortNameForStepFunctions:
+    Description: "Arn of AWS Step Functions." 
+    Type: String
+    Default: "sfn"
+  ShortNameForEvents:
+    Description: "Arn of Amazon CloudWatch Events." 
+    Type: String
+    Default: "evnt"
+  MonFreq:
+    Description: "Name of CloudWatch Events Rule. "
+    Type: String
+    Default: rate(1 minute)
+
+
+Resources: 
+# ------------------------------------------------------------#
+# Lambda: URL Monitoring
+# ------------------------------------------------------------#
+  UrlMonLambdaLayer:
+    Type: "AWS::Lambda::LayerVersion"
+    Properties:
+      CompatibleRuntimes:
+        - "python3.8"
+      Description: "For requests"
+      LayerName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", "url-requests"]]
+      Content: 
+        S3Bucket: !Ref "S3bucketForLmabda"
+        S3Key: !Ref "S3KeyForUrlMonLambdaLayer"
+  UrlMonLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: "URL Monitoring"
+      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", "url-monitoring" ]]
+      Environment:
+        Variables:
+          URL_LIST: !Ref "UrlListDynamodbTable"
+      Handler: "index.lambda_handler"
+      MemorySize: 128
+      Role: !GetAtt "UrlMonLambdaRole.Arn"
+      Layers: 
+        - !Ref "UrlMonLambdaLayer"
+      Runtime: "python3.8"
+      Tags:
+        - Key: !Ref "CostTagKey"
+          Value: !Ref "CostTagValue"
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref "S3bucketForLmabda"
+        S3Key: !Ref "S3KeyForUrlMonLambda"
+  UrlMonLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies: 
+        - PolicyName: "logs-for-lambda"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "logs:CreateLogGroup"
+                   - "logs:CreateLogStream"
+                   - "logs:PutLogEvents"
+                 Resource: !Sub "arn:${AWS::Partition}:logs:*:*:*" 
+        - PolicyName: "dynamodb-scan"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "dynamodb:Scan"
+                 Resource: !Sub "arn:${AWS::Partition}:dynamodb:*:*:*" 
+        - PolicyName: "kms-decrypt"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "kms:Decrypt"
+                 Resource: !Sub "arn:${AWS::Partition}:kms:*:*:*"      
+  UrlMonLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName:  !Ref "UrlMonLambda"
+      Principal: "events.amazonaws.com"
+  UrlMonLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, !Split [ ':', !GetAtt "UrlMonLambda.Arn" ] ] ] ]
+  UrlMonErrorMetricFilter: 
+    Type: AWS::Logs::MetricFilter
+    Properties: 
+      LogGroupName: 
+        !Ref "UrlMonLambdaLogGroup"
+      FilterPattern: "?ERROR ?error ?Error"
+      MetricTransformations: 
+        - 
+          MetricValue: 1
+          MetricNamespace: !Join ['/', ['lambda', !Ref "UrlMonLambda"]]
+          MetricName: "ERROR"
+  UrlMonErrorAlarm:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties: 
+      ActionsEnabled: true
+      AlarmActions: 
+        - !Ref "SnsArn"
+      AlarmDescription: "Monitor a error of lambda function."
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[Lambda Error] ', !Ref "UrlMonLambda"]]
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      DatapointsToAlarm: 1
+      EvaluationPeriods: 1
+      MetricName: "ERROR"
+      Namespace: !Join ['/', ['lambda', !Ref "UrlMonLambda"]]
+      Period: 60
+      Statistic: "Sum"
+      OKActions: 
+        - !Ref "SnsArn"
+      TreatMissingData: "notBreaching"
+      Threshold: 1
+
+# ------------------------------------------------------------#
+# Lambda: Call to Amazon Connect
+# ------------------------------------------------------------#
+  OnCallLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: "Call operator via Amazon Connect. Run by AWS Step Functions."
+      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", "oncall" ]]
+      Environment:
+        Variables:
+          PHONE_BOOK: !Ref "PhoneBookDynamodbTable"
+          URL_LIST: !Ref "UrlListDynamodbTable"
+          CONTACT_FLOW_ID: !Ref "ContactFlowId"
+          CONNECT_INSTANCE_ID: !Ref "ConnectInstanceId"
+          SOURCE_PHONE_NUMBER: !Ref "SourcePhoneNumber"
+      Handler: "index.lambda_handler"
+      MemorySize: 128
+      Role: !GetAtt "OnCallLambdaRole.Arn"
+      Runtime: "python3.8"
+      Tags:
+        - Key: !Ref "CostTagKey"
+          Value: !Ref "CostTagValue"
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref "S3bucketForLmabda"
+        S3Key: !Ref "S3KeyForOnCallLambda"
+  OnCallLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies: 
+        - PolicyName: "logs-for-lambda"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "logs:CreateLogGroup"
+                   - "logs:CreateLogStream"
+                   - "logs:PutLogEvents"
+                 Resource: !Sub "arn:${AWS::Partition}:logs:*:*:*"
+        - PolicyName: "dynamodb-get-item"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "dynamodb:GetItem"
+                 Resource: !Sub "arn:${AWS::Partition}:dynamodb:*:*:*"
+        - PolicyName: "kms-decrypt"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "kms:Decrypt"
+                 Resource: !Sub "arn:${AWS::Partition}:kms:*:*:*"
+        - PolicyName: "start-outbound-voic-contact"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "connect:StartOutboundVoiceContact"
+                 Resource: !Sub "arn:${AWS::Partition}:connect:*:*:*"
+  OnCallLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, !Split [ ':', !GetAtt "OnCallLambda.Arn" ] ] ] ]
+  OnCallLambdaErrorMetricFilter: 
+    Type: AWS::Logs::MetricFilter
+    Properties: 
+      LogGroupName: 
+        !Ref "OnCallLambdaLogGroup"
+      FilterPattern: "?ERROR ?error ?Error"
+      MetricTransformations: 
+        - 
+          MetricValue: 1
+          MetricNamespace: !Join ['/', ['lambda', !Ref "OnCallLambda"]]
+          MetricName: "ERROR"
+  OnCallLambdaErrorAlarm:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties: 
+      ActionsEnabled: true
+      AlarmActions: 
+        - !Ref "SnsArn"
+      AlarmDescription: "Monitor a error of lambda function."
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[Lambda Error] ', !Ref "OnCallLambda"]]
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      DatapointsToAlarm: 1
+      EvaluationPeriods: 1
+      MetricName: "ERROR"
+      Namespace: !Join ['/', ['lambda', !Ref "OnCallLambda"]]
+      Period: 60
+      Statistic: "Sum"
+      OKActions: 
+        - !Ref "SnsArn"
+      TreatMissingData: "notBreaching"
+      Threshold: 1
+
+# ------------------------------------------------------------#
+# Lambda: Call back to Amazon Connect
+# ------------------------------------------------------------#
+  CallBkLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: "Call back to Amazon Connect."
+      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", "callback-connect" ]]
+      Handler: "index.lambda_handler"
+      MemorySize: 128
+      Role: !GetAtt "CallBkLambdaRole.Arn"
+      Runtime: "python3.8"
+      Tags:
+        - Key: !Ref "CostTagKey"
+          Value: !Ref "CostTagValue"
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref "S3bucketForLmabda"
+        S3Key: !Ref "S3KeyForCallBkLambda"
+  CallBkLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies: 
+        - PolicyName: "logs-for-lambda"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "logs:CreateLogGroup"
+                   - "logs:CreateLogStream"
+                   - "logs:PutLogEvents"
+                 Resource: !Sub "arn:${AWS::Partition}:logs:*:*:*"
+        - PolicyName: "states-send-task-result"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "states:SendTaskFailure"
+                   - "states:SendTaskSuccess"
+                 Resource: !Sub "arn:${AWS::Partition}:states:*:*:*"
+  CallBkLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, !Split [ ':', !GetAtt "CallBkLambda.Arn" ] ] ] ]
+  CallBkLambdaErrorMetricFilter: 
+    Type: AWS::Logs::MetricFilter
+    Properties: 
+      LogGroupName: 
+        !Ref "CallBkLambdaLogGroup"
+      FilterPattern: "?ERROR ?error ?Error"
+      MetricTransformations: 
+        - 
+          MetricValue: 1
+          MetricNamespace: !Join ['/', ['lambda', !Ref "CallBkLambda"]]
+          MetricName: "ERROR"
+  CallBkLambdaErrorAlarm:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties: 
+      ActionsEnabled: true
+      AlarmActions: 
+        - !Ref "SnsArn"
+      AlarmDescription: "Monitor a error of lambda function."
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[Lambda Error] ', !Ref "CallBkLambda"]]
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      DatapointsToAlarm: 1
+      EvaluationPeriods: 1
+      MetricName: "ERROR"
+      Namespace: !Join ['/', ['lambda', !Ref "CallBkLambda"]]
+      Period: 60
+      Statistic: "Sum"
+      OKActions: 
+        - !Ref "SnsArn"
+      TreatMissingData: "notBreaching"
+      Threshold: 1
+
+# ------------------------------------------------------------#
+# Lambda: Add target url for monitoring.
+# ------------------------------------------------------------#
+  AddUrlLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: "Add url for monitoring."
+      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", "add-url" ]]
+      Handler: "index.lambda_handler"
+      MemorySize: 128
+      Role: !GetAtt "AddUrlLambdaRole.Arn"
+      Layers: 
+        - !Ref "UrlMonLambdaLayer"
+      Runtime: "python3.8"
+      Environment:
+        Variables:
+          URL_LIST: !Ref "UrlListDynamodbTable"
+          TEST_URL: "None"
+      Tags:
+        - Key: !Ref "CostTagKey"
+          Value: !Ref "CostTagValue"
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref "S3bucketForLmabda"
+        S3Key: !Ref "S3KeyForAddUrlLambda"
+  AddUrlLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies: 
+        - PolicyName: "logs-for-lambda"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "logs:CreateLogGroup"
+                   - "logs:CreateLogStream"
+                   - "logs:PutLogEvents"
+                 Resource: !Sub "arn:${AWS::Partition}:logs:*:*:*"
+        - PolicyName: "dynamodb-put-item"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "dynamodb:PutItem"
+                 Resource: !Sub "arn:${AWS::Partition}:dynamodb:*:*:*"
+        - PolicyName: "kms-decrypt"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "kms:Decrypt"
+                 Resource: !Sub "arn:${AWS::Partition}:kms:*:*:*"
+  AddUrlLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, !Split [ ':', !GetAtt "AddUrlLambda.Arn" ] ] ] ]
+  AddUrlLambdaErrorMetricFilter: 
+    Type: AWS::Logs::MetricFilter
+    Properties: 
+      LogGroupName: 
+        !Ref "AddUrlLambdaLogGroup"
+      FilterPattern: "?ERROR ?error ?Error"
+      MetricTransformations: 
+        - 
+          MetricValue: 1
+          MetricNamespace: !Join ['/', ['lambda', !Ref "AddUrlLambda"]]
+          MetricName: "ERROR"
+  AddUrlLambdaErrorAlarm:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties: 
+      ActionsEnabled: true
+      AlarmActions: 
+        - !Ref "SnsArn"
+      AlarmDescription: "Monitor a error of lambda function."
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[Lambda Error] ', !Ref "AddUrlLambda"]]
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      DatapointsToAlarm: 1
+      EvaluationPeriods: 1
+      MetricName: "ERROR"
+      Namespace: !Join ['/', ['lambda', !Ref "AddUrlLambda"]]
+      Period: 60
+      Statistic: "Sum"
+      OKActions: 
+        - !Ref "SnsArn"
+      TreatMissingData: "notBreaching"
+      Threshold: 1
+
+# ------------------------------------------------------------#
+# Step Functions: Run oncall logic.
+# ------------------------------------------------------------#
+  OncallStates:
+    Type: "AWS::StepFunctions::StateMachine"
+    Properties:
+      DefinitionString: !Sub |-
+        {
+          "StartAt": "1st",
+          "TimeoutSeconds": 600,
+          "States": {
+            "1st": {
+              "Type": "Task",
+              "TimeoutSeconds": 60,
+              "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+              "Parameters": {
+                "FunctionName": "${OnCallLambda.Arn}",
+                "Payload": {
+                  "ExecutionContext.$": "$$"
+                }
+              },
+              "Catch": [ {
+                "ErrorEquals": [ "States.Timeout" ],
+                "Next": "2nd"
+              },
+              {
+                "ErrorEquals": [ "States.ALL" ],
+                "Next": "Assign failed"
+              }],
+              "Next": "Assign succeed"
+            },
+            "2nd": {
+              "Type": "Task",
+              "TimeoutSeconds": 60,
+              "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+              "Parameters": {
+                "FunctionName": "${OnCallLambda.Arn}",
+                "Payload": {
+                  "ExecutionContext.$": "$$"
+                }
+              },
+              "Catch": [ {
+                "ErrorEquals": [ "States.Timeout" ],
+                "Next": "3rd"
+              },
+              {
+                "ErrorEquals": [ "States.ALL" ],
+                "Next": "Assign failed"
+              }],
+              "Next": "Assign succeed"
+            },
+                    "3rd": {
+              "Type": "Task",
+              "TimeoutSeconds": 60,
+              "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+              "Parameters": {
+                "FunctionName": "${OnCallLambda.Arn}",
+                "Payload": {
+                  "ExecutionContext.$": "$$"
+                }
+              },
+              "Catch": [ {
+                "ErrorEquals": [ "States.Timeout" ],
+                "Next": "1st"
+              },
+              {
+                "ErrorEquals": [ "States.ALL" ],
+                "Next": "Assign failed"
+              }],
+              "Next": "Assign succeed"
+            },
+            "Assign succeed": {
+              "Type": "Pass",
+              "End": true
+            },
+            "Assign failed": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        }
+      RoleArn: !GetAtt "OncallStatesRole.Arn"
+      LoggingConfiguration:
+        Destinations: 
+          - CloudWatchLogsLogGroup: !GetAtt "OncallStatesLogGroup.Arn"
+        IncludeExecutionData: true
+        Level: "ALL"
+      StateMachineName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForStepFunctions", "state-oncall"]]
+      StateMachineType: "STANDARD"
+      Tags:
+        - Key: !Ref "CostTagKey"
+          Value: !Ref "CostTagValue"
+  OncallStatesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+      LogGroupName: "/aws/vendedlogs/states/state-oncall"
+  OncallStatesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "states.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies: 
+        - PolicyName: "logs-for-states"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "logs:CreateLogDelivery"
+                   - "logs:GetLogDelivery"
+                   - "logs:UpdateLogDelivery"
+                   - "logs:DeleteLogDelivery"
+                   - "logs:ListLogDeliveries"
+                   - "logs:PutResourcePolicy"
+                   - "logs:DescribeResourcePolicies"
+                   - "logs:DescribeLogGroups"
+                 Resource: "*" 
+        - PolicyName: "lambda-for-states"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "lambda:InvokeFunction"
+                 Resource: !GetAtt "OnCallLambda.Arn" 
+  OncallEventsRuleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "events.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies: 
+        - PolicyName: "states-for-events"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+               - 
+                 Effect: "Allow"
+                 Action: 
+                   - "states:StartExecution"
+                 Resource: !GetAtt "OncallStates.Arn"
+  OncallStatesErrorMetricFilter: 
+    Type: AWS::Logs::MetricFilter
+    Properties: 
+      LogGroupName: 
+        !Ref "OncallStatesLogGroup"
+      FilterPattern: "?ERROR ?error ?Error -\"HTTP Error\""
+      MetricTransformations: 
+        - 
+          MetricValue: 1
+          MetricNamespace: !Join ['/', ['lambda', !GetAtt "OncallStates.Name" ]]
+          MetricName: "ERROR"
+  OncallStatesErrorAlarm:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties: 
+      ActionsEnabled: true
+      AlarmActions: 
+        - !Ref "SnsArn"
+      AlarmDescription: "Monitor a error of lambda function."
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[States Error] ', !GetAtt "OncallStates.Name"]]
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      DatapointsToAlarm: 1
+      EvaluationPeriods: 1
+      MetricName: "ERROR"
+      Namespace: !Join ['/', ['lambda', !GetAtt "OncallStates.Name"]]
+      Period: 60
+      Statistic: "Sum"
+      OKActions: 
+        - !Ref "SnsArn"
+      TreatMissingData: "notBreaching"
+      Threshold: 1
+
+# ------------------------------------------------------------#
+# DynamoDB: Create table "url-list" and "phone-book".
+# ------------------------------------------------------------#
+  UrlListDynamodbTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - 
+         AttributeName: "urls"
+         AttributeType: "S"
+      KeySchema:
+        - 
+          AttributeName: "urls"
+          KeyType: "HASH"
+      ProvisionedThroughput: 
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+      BillingMode: "PROVISIONED"
+      SSESpecification: 
+        KMSMasterKeyId: !Ref KmsKeyId
+        SSEEnabled: true
+        SSEType: "KMS"
+      TableName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForDynamoDB", "url-list"]]
+  PhoneBookDynamodbTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - 
+         AttributeName: "calling-order"
+         AttributeType: "S"
+      KeySchema:
+        - 
+          AttributeName: "calling-order"
+          KeyType: "HASH"
+      ProvisionedThroughput: 
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+      BillingMode: "PROVISIONED"
+      SSESpecification: 
+        KMSMasterKeyId: !Ref KmsKeyId
+        SSEEnabled: true
+        SSEType: "KMS"
+      TableName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForDynamoDB", "phone-book"]]
+
+
+# ------------------------------------------------------------#
+# CloudWatch Events: Create rule for run Step Functions.
+# ------------------------------------------------------------#
+  UrlMonRule:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: "Run url monitoring per minutes."
+      Name: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForEvents", 'url-monitoring']]
+      ScheduleExpression: !Ref MonFreq
+      State: "ENABLED"
+      Targets:
+        -   Arn: !GetAtt "UrlMonLambda.Arn"
+            Id: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForEvents", 'url-monitoring']]
+
+
+Outputs:
+  UrlMonLambdaLogGroupExp:
+    Description: "Arn of log group for lambda function for url monitoring. Expected use case is when use by other stacks require this output."
+    Value: !Ref "UrlMonLambdaLogGroup"
+    Export: 
+      Name: !Sub "${AWS::StackName}-UrlMonLambdaFunc"
+  UrlMonLambdaExp:
+    Description: "Arn of lambda function for url monitoring. Expected use case is when use by other stacks require this output."
+    Value: !GetAtt "UrlMonLambda.Arn"
+    Export: 
+      Name: !Sub "${AWS::StackName}-UrlMonLambdaLogGroup"
+  AddUrlLambdaExp:
+    Description: "Arn of lambda function for add url monitoring. Expected use case is when use by other stacks require this output."
+    Value: !GetAtt "AddUrlLambda.Arn"
+    Export: 
+      Name: !Sub "${AWS::StackName}-AddUrlLambda"
+  OncallStatesExp:
+    Description: "Arn of state of step function. Expected use case is when use by other stacks require this output."
+    Value: !GetAtt "OncallStates.Arn"
+    Export: 
+      Name: !Sub "${AWS::StackName}-OncallStates"
+  InvokeStepFunctionArn:
+    Description: "Arn of role for invoke step function. Expected use case is when use by other stacks require this output."
+    Value: !GetAtt "OncallEventsRuleRole.Arn"
+    Export: 
+      Name: !Sub "${AWS::StackName}-OncallEventsRuleRole"

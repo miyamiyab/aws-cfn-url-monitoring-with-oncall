@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Register target url for monitoring."
+
+Parameters: 
+  LogGroup:
+    Description: "Lambda Function is write http status code in this log group."
+    Type: String
+    Default: /aws/lambda/url-monitoring
+  Url:
+    Description: "Target url for monitoring." 
+    Type: String
+  SnsArn:
+    Description: "Arn of Amazon SNS" 
+    Type: String   
+  NameSpace:
+    Description: "Name space for Metrics" 
+    Type: String 
+    Default: lambda/url-monitoring  
+  Ruby:
+    Description: "How to read aloud url." 
+    Type: String
+  AddUrlLambdaArn:
+    Description: "Arn of lambda function which add url for monitoring."
+    Type: String
+    Default: "arn:aws:lambda:*:*:function:add-url"
+  OncallStates:
+    Description: "Arn of state of step function."
+    Type: String
+    Default: "arn:aws:states:*:*:stateMachine:state-oncall"
+  InvokeStepFunctionRoleArn:
+    Description: "Arn of role for invoke step function."
+    Type: String
+  AlarmPeriod:
+    Description: "The length of time to evaluate the metric or expression to create each individual data point for an alarm. It is expressed in seconds. If you choose one minute as the period, the alarm evaluates the metric once per minute."
+    Type: Number
+    Default: 60
+  DatapointsToAlarm:
+    Description: "The number of data points within the Evaluation Periods that must be breaching to cause the alarm to go to the ALARM state. The breaching data points don't have to be consecutive, they just must all be within the last number of data points equal to Evaluation Period."
+    Type: Number
+    Default: 3
+  EvaluationPeriods:
+    Description: "The number of the most recent periods, or data points, to evaluate when determining alarm state."
+    Type: Number
+    Default: 5
+  AccountAlias:
+    Description: "For identify account(environment)." 
+    Type: String
+  ShortNameForEvents:
+    Description: "Arn of Amazon CloudWatch Events." 
+    Type: String
+    Default: "evnt"
+  MonStates:
+    Description: "Decide whether monitor url or not." 
+    Type: String
+    Default: true
+
+Resources: 
+  HttpErrorMetricFilter: 
+    Type: AWS::Logs::MetricFilter
+    Properties: 
+      LogGroupName: 
+        !Ref "LogGroup" 
+      FilterPattern: 
+        !Join ['', ['[url="', !Ref Url, '", statuscode=*, exectime=*]']]
+      MetricTransformations: 
+        - 
+          MetricValue: "$statuscode"
+          MetricNamespace: !Ref "NameSpace"
+          MetricName: !Join ['', [ '[', !Join ['-', [ !Select [ 0, !Split [ "://", !Ref Url ]], !Join ['_', !Split [ "/", !Select [ 1, !Split [ "://", !Ref Url ]]]] ] ], ']HTTPStatusCode']]
+  HttpExecTimeMetricFilter: 
+    Type: AWS::Logs::MetricFilter
+    Properties: 
+      LogGroupName: 
+        !Ref "LogGroup" 
+      FilterPattern: 
+        !Join ['', ['[url="', !Ref Url, '", statuscode=*, exectime=*]']]
+      MetricTransformations: 
+        - 
+          MetricValue: "$exectime"
+          MetricNamespace: !Ref "NameSpace"
+          MetricName: !Join ['', [ '[', !Join ['-', [ !Select [ 0, !Split [ "://", !Ref Url ]], !Join ['_', !Split [ "/", !Select [ 1, !Split [ "://", !Ref Url ]]]] ] ], ']HTTPResponseTime']]
+  HttpErrorAlarm:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties: 
+      ActionsEnabled: true
+      AlarmActions: 
+        - !Ref "SnsArn"
+      AlarmDescription: "Monitoring HTTP status code."
+      AlarmName: !Join ['', ['[', !Ref "AccountAlias", ']','[', !Ref Url, '] HTTP Error']]
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      DatapointsToAlarm: !Ref "DatapointsToAlarm"
+      EvaluationPeriods: !Ref "EvaluationPeriods"
+      MetricName: !Join ['', [ '[', !Join ['-', [ !Select [ 0, !Split [ "://", !Ref Url ]], !Join ['_', !Split [ "/", !Select [ 1, !Split [ "://", !Ref Url ]]]] ] ], ']HTTPStatusCode']]
+      Namespace: !Ref "NameSpace"
+      Period: !Ref "AlarmPeriod"
+      Statistic: "Maximum"
+      OKActions: 
+        - !Ref "SnsArn"
+      TreatMissingData: "missing"
+      Threshold: 400
+  PutItem:
+    Type: "AWS::CloudFormation::CustomResource"
+    Properties:
+      ServiceToken: !Ref "AddUrlLambdaArn"
+      Item: 
+        "urls": 
+          !Ref "Url"
+        "ruby": 
+          !Ref "Ruby"
+        "enabled": 
+          !Ref "MonStates"
+  HttpErrorRule:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: "Detect CloudWatch Alarm."
+      EventPattern: 
+        source:
+          - "aws.cloudwatch"
+        resources:
+          - !GetAtt "HttpErrorAlarm.Arn"
+        detail-type:
+          - "CloudWatch Alarm State Change"
+        detail:
+          state:
+            value:
+              - "ALARM"
+      Name: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForEvents", 'notification-http-status', !Join ['-', [ !Select [ 0, !Split [ "://", !Ref Url ]], !Join ['_', !Split [ "/", !Select [ 1, !Split [ "://", !Ref Url ]]]] ] ]]]
+      State: "ENABLED"
+      Targets:
+        -   Arn: !Ref "OncallStates"
+            Id: !Join ['-', [!Ref "AccountAlias", 'url-monitoring', !Join ['-', [ !Select [ 0, !Split [ "://", !Ref Url ]], !Join ['_', !Split [ "/", !Select [ 1, !Split [ "://", !Ref Url ]]]] ] ]]]
+            RoleArn: !Ref "InvokeStepFunctionRoleArn"
