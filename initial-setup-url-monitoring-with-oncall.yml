@@ -400,7 +400,6 @@ Resources:
       Environment:
         Variables:
           URL_LIST: !Ref "UrlListDynamodbTable"
-          TEST_URL: "None"
       Tags:
         - Key: !Ref "CostTagKey"
           Value: !Ref "CostTagValue"
