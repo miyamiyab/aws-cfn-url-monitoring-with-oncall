@@ -89,6 +89,7 @@ Resources:
       Environment:
         Variables:
           URL_LIST: !Ref "UrlListDynamodbTable"
+          TEST_URL: "None"
       Handler: "index.lambda_handler"
       MemorySize: 128
       Role: !GetAtt "UrlMonLambdaRole.Arn"
