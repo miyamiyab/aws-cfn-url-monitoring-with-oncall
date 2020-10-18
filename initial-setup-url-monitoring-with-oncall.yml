@@ -751,11 +751,11 @@ Resources:
     Properties:
       AttributeDefinitions:
         - 
-         AttributeName: "urls"
+         AttributeName: "url-aliases"
          AttributeType: "S"
       KeySchema:
         - 
-          AttributeName: "urls"
+          AttributeName: "url-aliases"
           KeyType: "HASH"
       ProvisionedThroughput: 
         ReadCapacityUnits: 1
