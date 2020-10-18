@@ -10,22 +10,32 @@ FAILED = "FAILED"
 
 def put_target_url(event, table_name: str =os.environ['URL_LIST']) -> None:
     # access to dynamodb
-    response = DYNAMODB.put_item(
-        TableName = table_name,
-        Item={
-            "urls": {
-                "S": event['ResourceProperties']['Item']['urls']
-            },
-            "ruby": {
-                "S": event['ResourceProperties']['Item']['ruby']
-            },
-            "enabled": {
-                "BOOL": bool(event['ResourceProperties']['Item']['enabled'])
+    try:
+        response = DYNAMODB.put_item(
+            TableName = table_name,
+            Item={
+                "urls": {
+                    "S": event['ResourceProperties']['Item']['urls']
+                },
+                "url-aliases": {
+                    "S": event['ResourceProperties']['Item']['url-aliases']
+                },
+                "ruby": {
+                    "S": event['ResourceProperties']['Item']['ruby']
+                },
+                "enabled": {
+                    "BOOL": bool(int(event['ResourceProperties']['Item']['enabled']))
+                }
             }
-        }
-    )
+        )
+        print(response)
+    except KeyError as e:
+        print("ERROR: Not exists " + str(e) + " in key list.")
+
+    except ValueError as e:
+        print("ERROR: " + str(e))
     
-    print(response)
+
 
  
 def send(event, context, responseStatus, noEcho=False):

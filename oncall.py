@@ -26,7 +26,7 @@ def get_url_ruby(target_url: str, table_name: str =os.environ['URL_LIST']) -> st
     response = DYNAMODB.get_item(
         TableName = table_name,
         Key={
-            "urls": {
+            "url-aliases": {
                 "S": target_url
             }
         }

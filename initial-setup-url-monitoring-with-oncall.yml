@@ -62,10 +62,76 @@ Parameters:
     Type: String
     Default: "evnt"
   MonFreq:
-    Description: "Name of CloudWatch Events Rule. "
+    Description: "Run frequency of url monitoring."
     Type: String
     Default: rate(1 minute)
+  AddUrlLambdaName:
+    Description: "Name of Lambda Function for add url. Please must specify this name to filename. e.g. add-url.py."
+    Type: String
+    Default: "add-url"
+  UrlMonLambdaName:
+    Description: "Name of Lambda Function for url monitoring. Please must specify this name to filename. e.g. url-monitoring.py."
+    Type: String
+    Default: "url-monitoring"
+  OnCallLambdaName:
+    Description: "Name of Lambda Function for call via Connect. Please must specify this name to filename. e.g. oncall.py."
+    Type: String
+    Default: "oncall"
+  CallBkLambdaName:
+    Description: "Name of Lambda Function for call back to Step Functions. Please must specify this name to filename. e.g. callback-sfn.py."
+    Type: String
+    Default: "callback-sfn"
+  OnCallStateMachineName:
+    Description: "Name of State machine for rotation control system."
+    Type: String
+    Default: "oncall"
+  OnCallSfnLogGroup:
+    Description: "State machine of this system write execution result in this log group."
+    Type: String
+    Default: "/aws/vendedlogs/states/state-oncall"
 
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - 
+        Label:
+          default: "Resource location of lambda"
+        Parameters:
+          - S3bucketForLmabda
+          - S3KeyForUrlMonLambdaLayer
+          - S3KeyForUrlMonLambda
+          - S3KeyForOnCallLambda
+          - S3KeyForCallBkLambda
+          - S3KeyForAddUrlLambda
+      - 
+        Label:
+          default: "Parameter of Amazon Connect"
+        Parameters:
+          - ConnectInstanceId
+          - ContactFlowId
+          - SourcePhoneNumber
+      - 
+        Label:
+          default: "Tags"
+        Parameters:
+          - CostTagKey
+          - CostTagValue
+      - 
+        Label:
+          default: "Name of Lambda Functions"
+        Parameters:
+          - UrlMonLambdaName
+          - OnCallLambdaName
+          - CallBkLambdaName
+          - AddUrlLambdaName
+      - 
+        Label:
+          default: "Short name for AWS Services"
+        Parameters:
+          - ShortNameForDynamoDB
+          - ShortNameForLambda
+          - ShortNameForStepFunctions
+          - ShortNameForEvents
 
 Resources: 
 # ------------------------------------------------------------#
@@ -85,12 +151,12 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       Description: "URL Monitoring"
-      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", "url-monitoring" ]]
+      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", !Ref "UrlMonLambdaName" ]]
       Environment:
         Variables:
           URL_LIST: !Ref "UrlListDynamodbTable"
           TEST_URL: "None"
-      Handler: "index.lambda_handler"
+      Handler: !Join [ '.', [ !Ref "UrlMonLambdaName", "lambda_handler" ] ]
       MemorySize: 128
       Role: !GetAtt "UrlMonLambdaRole.Arn"
       Layers: 
@@ -153,7 +219,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       RetentionInDays: 30
-      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, !Split [ ':', !GetAtt "UrlMonLambda.Arn" ] ] ] ]
+      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, Fn::Split: [ ':', !GetAtt "UrlMonLambda.Arn" ] ] ] ]
   UrlMonErrorMetricFilter: 
     Type: AWS::Logs::MetricFilter
     Properties: 
@@ -184,6 +250,16 @@ Resources:
         - !Ref "SnsArn"
       TreatMissingData: "notBreaching"
       Threshold: 1
+  UrlMonEventsRule:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: "Run url monitoring per minutes."
+      Name: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForEvents", 'url-monitoring']]
+      ScheduleExpression: !Ref MonFreq
+      State: "ENABLED"
+      Targets:
+        -   Arn: !GetAtt "UrlMonLambda.Arn"
+            Id: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForEvents", 'url-monitoring']]
 
 # ------------------------------------------------------------#
 # Lambda: Call to Amazon Connect
@@ -192,7 +268,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       Description: "Call operator via Amazon Connect. Run by AWS Step Functions."
-      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", "oncall" ]]
+      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", !Ref "OnCallLambdaName" ]]
       Environment:
         Variables:
           PHONE_BOOK: !Ref "PhoneBookDynamodbTable"
@@ -200,7 +276,7 @@ Resources:
           CONTACT_FLOW_ID: !Ref "ContactFlowId"
           CONNECT_INSTANCE_ID: !Ref "ConnectInstanceId"
           SOURCE_PHONE_NUMBER: !Ref "SourcePhoneNumber"
-      Handler: "index.lambda_handler"
+      Handler: !Join [ '.', [ !Ref "OnCallLambdaName", "lambda_handler" ] ]
       MemorySize: 128
       Role: !GetAtt "OnCallLambdaRole.Arn"
       Runtime: "python3.8"
@@ -264,7 +340,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       RetentionInDays: 30
-      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, !Split [ ':', !GetAtt "OnCallLambda.Arn" ] ] ] ]
+      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, Fn::Split: [ ':', !GetAtt "OnCallLambda.Arn" ] ] ] ]
   OnCallLambdaErrorMetricFilter: 
     Type: AWS::Logs::MetricFilter
     Properties: 
@@ -297,14 +373,14 @@ Resources:
       Threshold: 1
 
 # ------------------------------------------------------------#
-# Lambda: Call back to Amazon Connect
+# Lambda: Call back to Step Functions
 # ------------------------------------------------------------#
   CallBkLambda:
     Type: AWS::Lambda::Function
     Properties:
-      Description: "Call back to Amazon Connect."
-      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", "callback-connect" ]]
-      Handler: "index.lambda_handler"
+      Description: "Call back to Step Functions."
+      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", !Ref "CallBkLambdaName" ]]
+      Handler: !Join [ '.', [ !Ref "CallBkLambdaName", "lambda_handler" ] ]
       MemorySize: 128
       Role: !GetAtt "CallBkLambdaRole.Arn"
       Runtime: "python3.8"
@@ -351,7 +427,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       RetentionInDays: 30
-      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, !Split [ ':', !GetAtt "CallBkLambda.Arn" ] ] ] ]
+      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, Fn::Split: [ ':', !GetAtt "CallBkLambda.Arn" ] ] ] ]
   CallBkLambdaErrorMetricFilter: 
     Type: AWS::Logs::MetricFilter
     Properties: 
@@ -390,8 +466,8 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       Description: "Add url for monitoring."
-      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", "add-url" ]]
-      Handler: "index.lambda_handler"
+      FunctionName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForLambda", !Ref "AddUrlLambdaName" ]]
+      Handler: !Join [ '.', [ !Ref "AddUrlLambdaName", "lambda_handler" ] ]
       MemorySize: 128
       Role: !GetAtt "AddUrlLambdaRole.Arn"
       Layers: 
@@ -451,7 +527,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       RetentionInDays: 30
-      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, !Split [ ':', !GetAtt "AddUrlLambda.Arn" ] ] ] ]
+      LogGroupName: !Join ['', ["/aws/lambda/", !Select [ 6, Fn::Split: [ ':', !GetAtt "AddUrlLambda.Arn" ] ] ] ]
   AddUrlLambdaErrorMetricFilter: 
     Type: AWS::Logs::MetricFilter
     Properties: 
@@ -570,7 +646,7 @@ Resources:
           - CloudWatchLogsLogGroup: !GetAtt "OncallStatesLogGroup.Arn"
         IncludeExecutionData: true
         Level: "ALL"
-      StateMachineName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForStepFunctions", "state-oncall"]]
+      StateMachineName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForStepFunctions", !Ref "OnCallStateMachineName" ]]
       StateMachineType: "STANDARD"
       Tags:
         - Key: !Ref "CostTagKey"
@@ -579,7 +655,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       RetentionInDays: 30
-      LogGroupName: "/aws/vendedlogs/states/state-oncall"
+      LogGroupName: !Ref "OnCallSfnLogGroup"
   OncallStatesRole:
     Type: AWS::IAM::Role
     Properties:
@@ -712,44 +788,24 @@ Resources:
       TableName: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForDynamoDB", "phone-book"]]
 
 
-# ------------------------------------------------------------#
-# CloudWatch Events: Create rule for run Step Functions.
-# ------------------------------------------------------------#
-  UrlMonRule:
-    Type: "AWS::Events::Rule"
-    Properties:
-      Description: "Run url monitoring per minutes."
-      Name: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForEvents", 'url-monitoring']]
-      ScheduleExpression: !Ref MonFreq
-      State: "ENABLED"
-      Targets:
-        -   Arn: !GetAtt "UrlMonLambda.Arn"
-            Id: !Join ['-', [!Ref "AccountAlias", !Ref "ShortNameForEvents", 'url-monitoring']]
-
-
 Outputs:
-  UrlMonLambdaLogGroupExp:
+  UrlMonLambdaLogGroup:
     Description: "Arn of log group for lambda function for url monitoring. Expected use case is when use by other stacks require this output."
     Value: !Ref "UrlMonLambdaLogGroup"
     Export: 
-      Name: !Sub "${AWS::StackName}-UrlMonLambdaFunc"
-  UrlMonLambdaExp:
-    Description: "Arn of lambda function for url monitoring. Expected use case is when use by other stacks require this output."
-    Value: !GetAtt "UrlMonLambda.Arn"
-    Export: 
       Name: !Sub "${AWS::StackName}-UrlMonLambdaLogGroup"
-  AddUrlLambdaExp:
+  AddUrlLambdaArn:
     Description: "Arn of lambda function for add url monitoring. Expected use case is when use by other stacks require this output."
     Value: !GetAtt "AddUrlLambda.Arn"
     Export: 
-      Name: !Sub "${AWS::StackName}-AddUrlLambda"
-  OncallStatesExp:
+      Name: !Sub "${AWS::StackName}-AddUrlLambdaArn"
+  OncallStatesArn:
     Description: "Arn of state of step function. Expected use case is when use by other stacks require this output."
     Value: !GetAtt "OncallStates.Arn"
     Export: 
-      Name: !Sub "${AWS::StackName}-OncallStates"
-  InvokeStepFunctionArn:
+      Name: !Sub "${AWS::StackName}-OncallStatesArn"
+  InvokeStepFunctionRoleArn:
     Description: "Arn of role for invoke step function. Expected use case is when use by other stacks require this output."
     Value: !GetAtt "OncallEventsRuleRole.Arn"
     Export: 
-      Name: !Sub "${AWS::StackName}-OncallEventsRuleRole"
+      Name: !Sub "${AWS::StackName}-InvokeStepFunctionRoleArn"
