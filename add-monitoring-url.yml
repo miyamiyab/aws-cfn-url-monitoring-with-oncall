@@ -116,7 +116,7 @@ Resources:
       ComparisonOperator: "GreaterThanOrEqualToThreshold"
       DatapointsToAlarm: !Ref "DatapointsToAlarm"
       EvaluationPeriods: !Ref "EvaluationPeriods"
-      MetricName: !Join ['', [ '[', !Ref UrlAlias, ']HTTPResponseTime']]
+      MetricName: !Join ['', [ '[', !Ref UrlAlias, ']HTTPStatusCode']]
       Namespace: !Ref "NameSpace"
       Period: !Ref "AlarmPeriod"
       Statistic: "Maximum"
